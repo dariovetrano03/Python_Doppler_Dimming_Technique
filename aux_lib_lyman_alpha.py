@@ -26,7 +26,11 @@ NU0_HZ = C_LIGHT_CGS / LAMBDA0_CM # [Hz] Frequency of the Ly-alpha transition
 
 B12_CGS = 8.4838e9 # [ster * cm2 / phot / s] Einstein's absorption coefficient for the Ly-alpha transition (from Giordano et al., 2025)
 
-J_CHROM_PHOT = 7e15 # [phot / cm2 / s / ster] Average intensity of the solar disk (from Giordano et al., 2025; Dolei et al., 2019)
+J_CHROM_PHOT = 5.5e15 # [phot / cm2 / s / ster] Average intensity of the solar disk (from Giordano et al., 2025; Dolei et al., 2019)
+
+E_PHOTON_LYA_ERG = H_PLANCK_CGS * C_LIGHT_CGS / LAMBDA0_CM
+
+J_CHROM_ERG = J_CHROM_PHOT * E_PHOTON_LYA_ERG
 
 SUM_Ai = 1.878 - 1.188 + 0.31017 # [-] ~ 1 (from Auchére, 2005)
 
@@ -161,15 +165,16 @@ def get_Gibson_temperature(r_solar):
 
 
 """"""
-    
-def precompute_los_arrays(r_pos_rsun, ne_interpolator, r_max, num_points_los=100):
+
+def precompute_los_arrays(r_pos_rsun, ne_interpolator, H_interpolator, r_max, num_points_los=100):    
+# def precompute_los_arrays(r_pos_rsun, ne_interpolator, r_max, num_points_los=100):
     x_los_rsun = np.linspace(-2 * r_max, 2 * r_max, num_points_los)
    
     r_3d_rsun = np.sqrt(r_pos_rsun**2 + x_los_rsun**2)
    
     n_e_array = ne_interpolator(r_3d_rsun)
     Te_array = get_Gibson_temperature(r_3d_rsun) 
-    Ri_array= get_hydrogen_neutral_fraction(Te_array)
+    Ri_array= H_interpolator(Te_array)
   
     beta_array = np.arccos(np.clip(r_pos_rsun / r_3d_rsun, -1, 1))
     x_los_cm = x_los_rsun * R_SUN_CM
@@ -185,7 +190,8 @@ def precompute_los_arrays(r_pos_rsun, ne_interpolator, r_max, num_points_los=100
     
     return r_3d_rsun, n_e_array, Ri_array, beta_array, x_los_cm, theta_matrix
 
-def precompute_los_arrays_II(r_pos_rsun, ne_interpolator, Vw_interpolator, r_max, num_points_los=100):
+# def precompute_los_arrays_II(r_pos_rsun, ne_interpolator, Vw_interpolator, r_max, num_points_los=100):
+def precompute_los_arrays_II(r_pos_rsun, ne_interpolator, Vw_interpolator, H_interpolator, r_max, num_points_los=100):    
 
     x_los_rsun = np.linspace(-2 * r_max, 2 * r_max, num_points_los)
    
@@ -195,11 +201,11 @@ def precompute_los_arrays_II(r_pos_rsun, ne_interpolator, Vw_interpolator, r_max
     
     Vw_array = Vw_interpolator(r_3d_rsun)
 
-    Vw_array[Vw_array > 500] = 500
+    # Vw_array[Vw_array > 500] = 500
     
     Te_array = get_Gibson_temperature(r_3d_rsun) 
 
-    Ri_array= get_hydrogen_neutral_fraction(Te_array)
+    Ri_array= H_interpolator(Te_array)
   
     beta_array = np.arccos(np.clip(r_pos_rsun / r_3d_rsun, -1, 1))
     
@@ -245,6 +251,9 @@ def calculate_emissivity_numba(vw_cms, n_e, R_i, beta_rad, theta_arr,
     integral_theta = trapz_numba(integrand, theta_arr)
 
     prefactor = (n_pe * B12_CGS * H_PLANCK_CGS * LAMBDA0_CM * J_CHROM_PHOT) / (4 * np.pi * SUM_Ai * 2 * np.sqrt(np.pi))
+   
+    # Correzione: LAMBDA0_CM va al denominatore e il 4*np.pi viene rimosso.
+    # prefactor = (H_PLANCK_CGS * B12_CGS * n_pe * J_CHROM_ERG) / (SUM_Ai * 2 * np.sqrt(np.pi) * LAMBDA0_CM)
     
     return prefactor * n_e * R_i * integral_theta
 

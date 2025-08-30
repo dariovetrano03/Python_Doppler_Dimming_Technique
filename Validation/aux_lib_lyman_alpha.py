@@ -1,8 +1,10 @@
 import numpy as np
 import ChiantiPy.core as ch
-from scipy.integrate import trapz
 
 import matplotlib.pyplot as plt
+from numba import njit
+
+
 
 # --- PHYSICAL CONSTANTS ---
 
@@ -24,7 +26,11 @@ NU0_HZ = C_LIGHT_CGS / LAMBDA0_CM # [Hz] Frequency of the Ly-alpha transition
 
 B12_CGS = 8.4838e9 # [ster * cm2 / phot / s] Einstein's absorption coefficient for the Ly-alpha transition (from Giordano et al., 2025)
 
-J_CHROM_PHOT = 5.78e15 # [phot / cm2 / s / ster] Average intensity of the solar disk (from Giordano et al., 2025; Dolei et al., 2019)
+J_CHROM_PHOT = 5.5e15 # [phot / cm2 / s / ster] Average intensity of the solar disk (from Giordano et al., 2025; Dolei et al., 2019)
+
+E_PHOTON_LYA_ERG = H_PLANCK_CGS * C_LIGHT_CGS / LAMBDA0_CM
+
+J_CHROM_ERG = J_CHROM_PHOT * E_PHOTON_LYA_ERG
 
 SUM_Ai = 1.878 - 1.188 + 0.31017 # [-] ~ 1 (from Auchére, 2005)
 
@@ -54,6 +60,18 @@ params = {'1': {'a': 1.878, 'delta_lambda': 0.001859e-7, 'sigma': 0.03075e-7},
           '2': {'a': -1.188, 'delta_lambda': 0.002087e-7, 'sigma': 0.02390e-7},
           '3': {'a': 0.31017, 'delta_lambda': 0.002159e-7, 'sigma': 0.07353e-7}}
 
+p_a = np.array([p['a'] for p in params.values()])
+p_delta_lambda = np.array([p['delta_lambda'] for p in params.values()])
+p_sigma = np.array([p['sigma'] for p in params.values()])
+
+
+@njit(fastmath=True, cache=True)
+def trapz_numba(y, x):
+    """A simple, Numba-compatible trapezoidal rule integrator."""
+    s = 0.0
+    for i in range(len(x) - 1):
+        s += (x[i+1] - x[i]) * (y[i+1] + y[i])
+    return s / 2.0
 
 def get_hydrogen_neutral_fraction(temperatures_K):
     """
@@ -126,19 +144,19 @@ def get_Gibson_temperature(r_solar):
     # --- Model parameters from Gibson et al. (1999), Table 1 ---
     alpha = 0.1           # [-] Helium abundance (n_He / n_p)
     a, b = 3.60, 15.3     # Parameters for the power-law fit of density
-    c_fit, d = 0.990, 7.34
+    c, d = 0.990, 7.34
     e, f = 0.365, 4.31
 
     # --- Calculations ---
     # Electron density n_e(r) from the three-part power law (Eq. 4 in the paper)
     # The 1e8 factor converts the model's base units to cm^-3.
-    ne_r = (a * r_solar**-b + c_fit * r_solar**-d + e * r_solar**-f) * 1e8
+    ne_r = (a * r_solar**-b + c * r_solar**-d + e * r_solar**-f) * 1e8
 
     # Pre-factor for the pressure integral, derived from the hydrostatic equilibrium equation.
     K_pressure = ((1 + 4*alpha) / (1 + 2*alpha)) * G_GRAVITATION_CGS * M_SUN_CGS * M_P_CGS * 1e8
 
     # Pressure P(r) obtained by integrating the density profile from r to infinity (Eq. 3).
-    P_r = K_pressure * ((a/(b+1))*r_solar**-(b+1) + (c_fit/(d+1))*r_solar**-(d+1) + (e/(f+1))*r_solar**-(f+1))
+    P_r = K_pressure * ((a/(b+1))*r_solar**-(b+1) + (c/(d+1))*r_solar**-(d+1) + (e/(f+1))*r_solar**-(f+1))
     P_r /= R_SUN_CM 
 
     temperature = ((1 + 2*alpha) / (2 + 3*alpha)) * (P_r / (ne_r * K_B_CGS))
@@ -147,57 +165,16 @@ def get_Gibson_temperature(r_solar):
 
 
 """"""
-    
-def precompute_los_arrays(r_pos_rsun, ne_interpolator, r_max, num_points_los=100):
 
-    """
-    Precomputes arrays needed for line-of-sight (LOS) integration in the solar corona.
-
-    This function generates arrays representing the geometry and plasma parameters
-    along the line of sight for a given heliocentric radial position (impact parameter). 
-    It calculates the 3D radial distances, electron densities interpolated from a provided function,
-    the angle between the LOS and the impact direction (beta), LOS distances in centimeters,
-    and a range of scattering angles for resonant scattering computations (theta).
-
-    Parameters
-    ----------
-    r_pos_rsun : float
-        Radial position of the LOS in units of solar radii (R☉).
-    ne_interpolator : callable
-        Interpolating function that returns electron density given a radial distance in R☉.
-    r_max : float
-        Maximum radial distance along the LOS in units of solar radii.
-    num_points_los : int, optional
-        Number of points along the line of sight for discretization (default is 100).
-
-    Returns
-    -------
-    r_3d_rsun : ndarray
-        Array of 3D radial distances along the LOS in units of solar radii.
-    n_e_array : ndarray
-        Electron density values interpolated at the 3D radial distances.
-    Ri_array : ndarray
-        Neutral hydrogen fractions (dimensionless, between 0 and 1) along the LOS, representing the fraction of hydrogen atoms available for resonant scattering.
-    beta_array : ndarray
-        Array of angles (in radians) between the LOS direction and the impact vector.
-    x_los_cm : ndarray
-        Distances along the LOS converted from solar radii to centimeters.
-    theta_matrix : ndarray
-        Array of scattering angles (in radians) for integration over incident radiation directions.
-
-    Notes
-    -----
-    - The LOS is assumed to be symmetric around the position r_pos_rsun, spanning from -2*r_max to 2*r_max.
-    - The theta angles represent the scattering angle range for resonant scattering computations and
-      are linearly spaced between 0 and the maximum angle determined by solar radius geometry.
-    """
+def precompute_los_arrays(r_pos_rsun, ne_interpolator, H_interpolator, r_max, num_points_los=100):    
+# def precompute_los_arrays(r_pos_rsun, ne_interpolator, r_max, num_points_los=100):
     x_los_rsun = np.linspace(-2 * r_max, 2 * r_max, num_points_los)
    
     r_3d_rsun = np.sqrt(r_pos_rsun**2 + x_los_rsun**2)
    
     n_e_array = ne_interpolator(r_3d_rsun)
     Te_array = get_Gibson_temperature(r_3d_rsun) 
-    Ri_array= get_hydrogen_neutral_fraction(Te_array)
+    Ri_array= H_interpolator(Te_array)
   
     beta_array = np.arccos(np.clip(r_pos_rsun / r_3d_rsun, -1, 1))
     x_los_cm = x_los_rsun * R_SUN_CM
@@ -213,7 +190,8 @@ def precompute_los_arrays(r_pos_rsun, ne_interpolator, r_max, num_points_los=100
     
     return r_3d_rsun, n_e_array, Ri_array, beta_array, x_los_cm, theta_matrix
 
-def precompute_los_arrays_II(r_pos_rsun, ne_interpolator, Vw_interpolator, r_max, num_points_los=100):
+# def precompute_los_arrays_II(r_pos_rsun, ne_interpolator, Vw_interpolator, r_max, num_points_los=100):
+def precompute_los_arrays_II(r_pos_rsun, ne_interpolator, Vw_interpolator, H_interpolator, r_max, num_points_los=100):    
 
     x_los_rsun = np.linspace(-2 * r_max, 2 * r_max, num_points_los)
    
@@ -223,11 +201,11 @@ def precompute_los_arrays_II(r_pos_rsun, ne_interpolator, Vw_interpolator, r_max
     
     Vw_array = Vw_interpolator(r_3d_rsun)
 
-    Vw_array[Vw_array > 600] = 600
+    # Vw_array[Vw_array > 500] = 500
     
     Te_array = get_Gibson_temperature(r_3d_rsun) 
 
-    Ri_array= get_hydrogen_neutral_fraction(Te_array)
+    Ri_array= H_interpolator(Te_array)
   
     beta_array = np.arccos(np.clip(r_pos_rsun / r_3d_rsun, -1, 1))
     
@@ -245,134 +223,88 @@ def precompute_los_arrays_II(r_pos_rsun, ne_interpolator, Vw_interpolator, r_max
 
 
 
-def calculate_emissivity(r_3d, vw_cms, n_e, R_i, beta_rad, theta_rad):
+@njit(fastmath=True, cache=True)
+def calculate_emissivity_numba(vw_cms, n_e, R_i, beta_rad, theta_arr, 
+                                 p_a, p_delta_lambda, p_sigma):
     """
-    Compute the local H I Lyman-alpha emissivity due to resonant scattering in the solar corona.
-
-    This function calculates the specific emissivity (photons cm⁻³ s⁻¹ sr⁻¹) of
-    neutral hydrogen atoms scattering chromospheric Lyman-alpha photons, based on
-    physical models described in the literature (e.g., Dolei et al., 2019; Giordano et al., 2025).
-
-    Parameters
-    ----------
-    r_3d : float
-        Heliocentric distance of the scattering location (i.e., the point along the LOS) in solar radii (R☉).
-    vw_cms : float
-        Bulk solar wind velocity at the scattering location, in cm/s.
-    n_e : float
-        Local electron number density at the scattering location, in cm⁻³.
-    R_i : float
-        Neutral hydrogen fraction (dimensionless, between 0 and 1) at the scattering point, representing the fraction of hydrogen atoms available for resonant scattering.
-    beta_rad : float
-        Angle (in radians) between the line of sight and the impact direction at the scattering point.
-    theta_rad : ndarray
-        Array of scattering angles (in radians) over which the emissivity is integrated.
-
-
-    Returns
-    -------
-    float
-        Local specific emissivity of the Lyman-alpha line in units of photons cm⁻³ s⁻¹ sr⁻¹.
-
-    Notes
-    -----
-    - The calculation involves integration over scattering angles weighted by the angular
-      redistribution function and velocity-dependent Doppler shifts.
-    - Constants and parameters such as transition probabilities and chromospheric intensity 
-      are embedded in the implementation.
+    Numba-jitted "kernel" for a SINGLE point on the LOS.
+    This function has not changed.
     """
-    
+    # Angular term calculation
     cos2_beta = np.cos(beta_rad)**2
-    sin2_beta = np.sin(beta_rad)**2
-    cos2_theta = np.cos(theta_rad)**2
-    sin2_theta = np.sin(theta_rad)**2
-
+    sin2_beta = 1.0 - cos2_beta
+    cos2_theta = np.cos(theta_arr)**2
+    sin2_theta = 1.0 - cos2_theta
     angular_term = (11.0 + 3.0 * (cos2_beta * cos2_theta + 0.5 * sin2_beta * sin2_theta)) / 12.0
 
-    sum_term = np.zeros_like(theta_rad)
-    
-    for p in params.values():
-        delta_lambda_i_cm = p['delta_lambda']
-        sigma_i_cm = p['sigma']
-        numerator = -(delta_lambda_i_cm - (LAMBDA0_CM / C_LIGHT_CGS) * vw_cms * np.cos(theta_rad))**2
-        denominator = w_cm**2 + sigma_i_cm**2
-        sum_term += (p['a'] / np.sqrt(denominator)) * np.exp(numerator / denominator)
-        
-    integrand = angular_term * np.sin(theta_rad) * sum_term
+    # Sum term calculation (explicit loop)
+    sum_term = np.zeros_like(theta_arr)
+    for i in range(p_a.shape[0]):
+        delta_lambda_i = p_delta_lambda[i]
+        sigma_i = p_sigma[i]
+        doppler_shift = (LAMBDA0_CM / C_LIGHT_CGS) * vw_cms * np.cos(theta_arr)
+        numerator = -(delta_lambda_i - doppler_shift)**2
+        denominator = w_cm**2 + sigma_i**2
+        sum_term += (p_a[i] / np.sqrt(denominator)) * np.exp(numerator / denominator)
 
-    integral_theta = trapz(integrand, theta_rad)
+    integrand = angular_term * np.sin(theta_arr) * sum_term
+    integral_theta = trapz_numba(integrand, theta_arr)
 
-    # Eq. (A.10) from Giordano et al., 2025:
-    prefactor = (n_pe * B12_CGS *  H_PLANCK_CGS * LAMBDA0_CM * J_CHROM_PHOT ) / (4 * np.pi * SUM_Ai * 2 * np.sqrt(np.pi)) 
+    prefactor = (n_pe * B12_CGS * H_PLANCK_CGS * LAMBDA0_CM * J_CHROM_PHOT) / (4 * np.pi * SUM_Ai * 2 * np.sqrt(np.pi))
+   
+    # Correzione: LAMBDA0_CM va al denominatore e il 4*np.pi viene rimosso.
+    # prefactor = (H_PLANCK_CGS * B12_CGS * n_pe * J_CHROM_ERG) / (SUM_Ai * 2 * np.sqrt(np.pi) * LAMBDA0_CM)
     
     return prefactor * n_e * R_i * integral_theta
 
-
-def integrate_intensity_los(vw_kms, r_3d_rsun, n_e_array, Ri_array, beta_array, theta_matrix, x_los_cm, T_HI=1e6):
+def integrate_intensity_los_numba(vw_kms, n_e_array, Ri_array, beta_array,
+                                      theta_matrix, x_los_cm,
+                                      p_a, p_delta_lambda, p_sigma):
     """
-    Integrate the H I Lyman-alpha emissivity along the line of sight to compute observed intensity.
-
-    This function calculates the total Lyman-alpha intensity observed along a line of sight
-    by integrating the local emissivity, which is computed at discrete points along the LOS.
-
-    Parameters
-    ----------
-    vw_kms : float
-        Bulk solar wind velocity in km/s.
-    r_3d_rsun : ndarray
-        Array of heliocentric distances along the LOS in units of solar radii (R☉).
-    n_e_array : ndarray
-        Electron density values at each point along the LOS, in cm⁻³.
-    beta_array : ndarray
-        Array of angles between the LOS and the impact direction at each LOS point (radians).
-    theta_matrix : ndarray
-        2D array of scattering angles (radians) used in emissivity calculations for each LOS point.
-    x_los_cm : ndarray
-        Distances along the LOS in centimeters.
-    T_HI : float, optional
-        Kinetic temperature of neutral hydrogen in Kelvin, used for absorption profile width (default: 1e6 K).
-
-    Returns
-    -------
-    float
-        Integrated Lyman-alpha intensity along the LOS in units of [photons cm⁻² s⁻¹ sr⁻¹].
-
-    Notes
-    -----
-    - Emissivity is first computed at each LOS point using `calculate_emissivity`.
-    - The final intensity is obtained by numerical integration over the LOS distance.
+    This is a regular Python function that acts as a fast dispatcher
+    to the appropriate Numba-compiled kernel.
     """
-
     vw_cms = vw_kms * 1e5
-    
-    emissivity_values = []
-    
-    for r, n_e, R_i, beta, theta_arr in zip(r_3d_rsun, n_e_array, Ri_array, beta_array, theta_matrix):
-        emissivity = calculate_emissivity(r, vw_cms, n_e, R_i, beta, theta_arr)
-        emissivity_values.append(emissivity)
-    
-    emissivity_values = np.array(emissivity_values)
 
-    # Integrate over line-of-sight distance x_los_cm
-    intensity = trapz(emissivity_values, x_los_cm)
-    
-    return intensity
+    # This 'if' happens once, in normal Python. The overhead is negligible.
+    if isinstance(vw_cms, (float, int)):
+        # Call the specialized Numba function for constant velocity
+        return _integrate_los_const_v_numba(
+            vw_cms, n_e_array, Ri_array, beta_array, theta_matrix,
+            x_los_cm, p_a, p_delta_lambda, p_sigma
+        )
+    else:
+        # Call the specialized Numba function for a velocity profile
+        return _integrate_los_profile_v_numba(
+            vw_cms, n_e_array, Ri_array, beta_array, theta_matrix,
+            x_los_cm, p_a, p_delta_lambda, p_sigma
+        )
 
 
-def integrate_intensity_los_II(vw_profile_kms, r_3d_rsun, n_e_array, Vw_array, Ri_array, beta_array, theta_matrix, x_los_cm, T_HI=1e6):
-  
-    vw_profile_cms = vw_profile_kms * 1e5
-    
-    emissivity_values = []
+@njit(fastmath=True, cache=True)
+def _integrate_los_const_v_numba(vw_cms, n_e_array, Ri_array, beta_array,
+                                  theta_matrix, x_los_cm,
+                                  p_a, p_delta_lambda, p_sigma):
+    """Numba kernel ONLY for a constant velocity (float)."""
+    emissivity_values = np.zeros(n_e_array.shape[0], dtype=np.float64)
+    for i in range(n_e_array.shape[0]):
+        # No 'if' check needed, vw_cms is always the same float.
+        emissivity_values[i] = calculate_emissivity_numba(
+            vw_cms, n_e_array[i], Ri_array[i], beta_array[i],
+            theta_matrix[i], p_a, p_delta_lambda, p_sigma
+        )
+    return trapz_numba(emissivity_values, x_los_cm)
 
-    for r, n_e, Vw, R_i, beta, theta_arr in zip(r_3d_rsun, n_e_array, vw_profile_cms, Ri_array, beta_array, theta_matrix):
-        emissivity = calculate_emissivity(r, Vw, n_e, R_i, beta, theta_arr)
-        emissivity_values.append(emissivity)
-    
-    emissivity_values = np.array(emissivity_values)
-
-    # Integrate over line-of-sight distance x_los_cm
-    intensity = trapz(emissivity_values, x_los_cm)
-    
-    return intensity
-
+@njit(fastmath=True, cache=True)
+def _integrate_los_profile_v_numba(vw_cms, n_e_array, Ri_array, beta_array,
+                                    theta_matrix, x_los_cm,
+                                    p_a, p_delta_lambda, p_sigma):
+    """Numba kernel ONLY for a velocity profile (array)."""
+    emissivity_values = np.zeros(n_e_array.shape[0], dtype=np.float64)
+    for i in range(n_e_array.shape[0]):
+        # No 'if' check needed, vw_cms is always an array to be indexed.
+        emissivity_values[i] = calculate_emissivity_numba(
+            vw_cms[i], n_e_array[i], Ri_array[i], beta_array[i],
+            theta_matrix[i], p_a, p_delta_lambda, p_sigma
+        )
+    return trapz_numba(emissivity_values, x_los_cm)
