@@ -1,23 +1,14 @@
 # Solar Wind Speed Mapping through Doppler Dimming Technique
-During my B.Sc. Thesis I got interested in the calculation of the Electron density maps from Solar Corona 
-remote observation through the as old as effective van de Hulst inversion technique. 
+During my B.Sc. thesis, I became interested in calculating electron density maps of the solar corona from remote observations using the **van de Hulst inversion technique**, a method as old as effective.
 
-Following this technique, the Electron density is computed from manipulating the polarized Brightness (pB)
-images. All the algorithm have been tested on ESA-NASA's Solar Orbiter/Metis coronagraph images.
+Using this technique, the electron density is derived from the manipulation of polarized brightness (pB) images.
 
-In this repository is contained the natural extension of this work, with the calculation of the Solar wind 
-speed outflow velocities maps from Electron density maps. The software lets you download a pB and and
-UltraViolet (UV) image from the Solar Orbiter ARchive (SOAR) through the `notebooks/SOAR_downloader.ipynb` 
-notebook, selecting a given time window of interest.
+This repository contains a natural extension of that work: the calculation of **solar wind outflow velocity maps**. The software allows you to download pB and ultraviolet (UV) images from the Solar Orbiter Archive (SOAR) via the `notebooks/SOAR_downloader.ipynb` notebook, selecting a specific time window of interest.
 
-Then, in the `notebooks/Metis_from_pB_and_UV_to_Wind_Speed.ipynb` is possible to invert the pB image to 
-retrieve the Electron density map, and after combining it with the UV image following a 2-step iterative
-procedure, it is possible to obtain the outflow velocity according to which the Intensity synthesized by 
-the coronal emission model is closer (within 1% tolerance) to the observed one.
+Next, in `notebooks/Metis_from_pB_and_UV_to_Wind_Speed.ipynb`, the pB images can be inverted to retrieve the electron density map. By combining this map with the UV images through a two-step iterative procedure, the outflow velocity can be obtained, such that the intensity synthesized by the coronal emission model matches the observed intensity within a 1% tolerance.
 
-The calculation process was validated through the comparision of data outputs with a previous exisiting
-version (already validated) written in IDL. The comparison between the two outputs can be found in 
-`notebooks/validation/DDT_test_&_validation.ipynb`.
+The calculation process was validated by comparing the outputs with a previous, already validated version written in IDL. The comparison can be found in `notebooks/validation/DDT_test_&_validation.ipynb`.
+
 
 ```text
 Python_Doppler_Dimming_Technique/
